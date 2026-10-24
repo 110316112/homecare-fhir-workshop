@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Q4 病人問題狀況 Observation 輸入</title>
+<style>
+body{font-family:system-ui,"Noto Sans TC",sans-serif;background:#f3f6fa;color:#263445;margin:0;padding:20px}
+main{max-width:920px;margin:auto}
+h1{font-size:24px}h2{font-size:18px;margin-top:0}
+.card{background:#fff;border:1px solid #dce4ed;border-radius:12px;padding:18px;margin:14px 0}
+label{display:block;font-weight:bold;margin:10px 0 4px}
+input[type=text],input[type=url],input[type=number],input[type=datetime-local],textarea{width:100%;box-sizing:border-box;padding:9px;border:1px solid #cbd5e1;border-radius:6px;font:inherit}
+textarea{min-height:170px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+button{border:0;border-radius:7px;padding:10px 16px;margin:8px 8px 0 0;background:#1769aa;color:#fff;cursor:pointer;font-size:15px}
+button.secondary{background:#536579}
+.detail{border:1px solid #dce4ed;border-radius:9px;padding:12px 14px;margin:10px 0}
+.detail-head{font-weight:bold;display:flex;gap:8px;align-items:center}
+.opts label{display:inline-block;font-weight:normal;margin:6px 16px 0 0}
+.meta{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;font-size:14px;line-height:1.6;margin-top:10px;display:none}
+.hint{color:#526274;font-size:14px}.status{white-space:pre-wrap;margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+<h1>Q4：病人問題狀況 Observation 輸入</h1>
+<p class="hint">教學原型，只使用虛構資料。讀取 DocumentReference 內的 detail CSV，依規格產生選項，寫入 Observation.component。</p>
+
+<div class="card">
+<h2>1. 伺服器、病人與規格網址</h2>
+<label for="server">FHIR Server URL</label>
+<input id="server" type="url" value="https://hapi.fhir.org/baseR4">
+<label for="patientId">Patient ID（測試用）</label>
+<input id="patientId" type="text" value="7158c01b-32ba-4fbd-a038-201a0a2a4e2a">
+<label for="specUrl">detail 規格的 DocumentReference URL</label>
+<input id="specUrl" type="url" value="https://hapi.fhir.org/baseR4/DocumentReference/92286468-30cd-411d-84f5-7d747dea8d30">
+<label for="effective">紀錄時間（預設為電腦目前時間）</label>
+<input id="effective" type="datetime-local">
+<button id="load" type="button">讀取規格</button>
+<div id="loadStatus" class="status"></div>
+<div id="meta" class="meta"></div>
+</div>
+
+<div class="card">
+<h2>2. 選擇紀錄項目</h2>
+<p class="hint">勾選要記錄的項目；選項是單選（radio），數值項目請直接輸入。選了選項會自動勾選該項目。</p>
+<div id="details"><p class="hint">請先讀取規格。</p></div>
+</div>
+
+<div class="card">
+<h2>3. 產生並上傳</h2>
+<button id="make" type="button">按鈕 1：產生 Observation JSON</button>
+<textarea id="jsonOut" spellcheck="false"></textarea>
+<button id="upload" type="button">按鈕 2：POST 上傳</button>
+<div id="uploadStatus" class="status"></div>
+<label for="resp">伺服器回應</label>
+<textarea id="resp" readonly></textarea>
+<label for="obsUrl">調閱此 Observation 的 URL</label>
+<input id="obsUrl" type="url" readonly>
+<button id="open" class="secondary" type="button">開啟 URL</button>
+</div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const HEADERS = ["problemCode","detailCode","detailName","detailNameEn","valueType","valueCode","valueDisplay","valueDisplayEn"];
+const DETAIL_SYSTEM = "https://example.org/fhir/CodeSystem/problem-detail";
+const PROBLEM_SYSTEM = "https://example.org/fhir/CodeSystem/patient-problem";
+let specRows = [], groups = [], problemCode = "";
+
+function esc(v){ return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function parseCSV(text){
+  text = text.replace(/^\uFEFF/, "");
+  const rows=[]; let row=[], f="", q=false;
+  for (let i=0;i<text.length;i++){
+    const c=text[i];
+    if (q){
+      if (c==='"' && text[i+1]==='"'){ f+='"'; i++; }
+      else if (c==='"') q=false; else f+=c;
+    } else {
+      if (c==='"' && f==="") q=true;
+      else if (c===","){ row.push(f.trim()); f=""; }
+      else if (c==="\n"){ row.push(f.trim()); if(row.some(v=>v!=="")) rows.push(row); row=[]; f=""; }
+      else if (c!=="\r") f+=c;
+    }
+  }
+  row.push(f.trim()); if(row.some(v=>v!=="")) rows.push(row);
+  return rows;
+}
+function decodeBase64UTF8(b64){
+  const bin = atob(b64.replace(/\s/g,"")); const bytes = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+function localNow(){
+  const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16);
+}
+$("effective").value = localNow();
+
+$("load").onclick = async () => {
+  const st = $("loadStatus");
+  try {
+    const url = $("specUrl").value.trim();
+    if (!url) throw new Error("請輸入 DocumentReference URL。");
+    st.textContent = "讀取中…";
+    const res = await fetch(url, { headers:{ Accept:"application/fhir+json, application/json" } });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const doc = await res.json();
+    if (doc.resourceType !== "DocumentReference") throw new Error("這個網址不是 DocumentReference。");
+    const data = doc.content && doc.content[0] && doc.content[0].attachment && doc.content[0].attachment.data;
+    if (!data) throw new Error("找不到 content[0].attachment.data。");
+    const rows = parseCSV(decodeBase64UTF8(data));
+    if (rows.length < 2 || HEADERS.some((h,i)=>rows[0][i]!==h)) throw new Error("CSV 標題列不是預期的 8 欄格式。");
+    specRows = rows.slice(1).map(r => Object.fromEntries(HEADERS.map((h,i)=>[h, r[i] || ""]))).filter(r=>r.detailCode);
+    if (!specRows.length) throw new Error("CSV 沒有資料列。");
+    problemCode = specRows[0].problemCode;
+    const by = {}; specRows.forEach(r => (by[r.detailCode] = by[r.detailCode] || []).push(r));
+    groups = Object.entries(by);
+    const idv = (doc.identifier && doc.identifier[0] && doc.identifier[0].value) || "-";
+    $("meta").style.display = "block";
+    $("meta").innerHTML = "問題代碼：<b>" + esc(problemCode) + "</b><br>micro-ig：" + esc(idv) + "<br>說明：" + esc(doc.description || "-");
+    renderDetails();
+    st.textContent = "讀取成功：" + groups.length + " 個項目、" + specRows.length + " 列規格。";
+  } catch(e){ st.textContent = "讀取失敗：" + e.message + "\n若是 Failed to fetch，請檢查網址、網路或 CORS。"; }
+};
+
+function renderDetails(){
+  $("details").innerHTML = groups.map(([code, items], gi) => {
+    const first = items[0], type = (first.valueType || "code").toLowerCase();
+    let body;
+    if (["code","select","choice","boolean"].includes(type)) {
+      body = '<div class="opts">' + items.filter(x=>x.valueCode).map((x,oi) =>
+        '<label><input type="radio" name="v_' + gi + '" value="' + esc(x.valueCode) + '" data-gi="' + gi + '" data-display="' + esc(x.valueDisplay) + '"> ' +
+        esc(x.valueDisplay) + (x.valueDisplayEn ? " / " + esc(x.valueDisplayEn) : "") + '</label>').join("") + '</div>';
+    } else {
+      const num = ["integer","quantity","number","decimal"].includes(type);
+      body = '<input type="' + (num ? "number" : "text") + '"' + (num ? ' step="any"' : "") + ' id="n_' + gi + '" data-gi="' + gi + '" placeholder="請輸入' + esc(first.detailName) + '">';
+    }
+    return '<div class="detail"><div class="detail-head"><input type="checkbox" id="c_' + gi + '"> <span>' + esc(first.detailName) +
+      (first.detailNameEn ? " (" + esc(first.detailNameEn) + ")" : "") + '</span></div>' + body +
+      '<div class="hint">detailCode: ' + esc(code) + '｜valueType: ' + esc(type) + '</div></div>';
+  }).join("");
+  $("details").querySelectorAll("input[data-gi]").forEach(el => el.addEventListener("change", () => {
+    $("c_" + el.dataset.gi).checked = true;
+  }));
+}
+
+function buildComponents(){
+  const comps = [];
+  groups.forEach(([code, items], gi) => {
+    const cb = $("c_" + gi); if (!cb || !cb.checked) return;
+    const first = items[0], type = (first.valueType || "code").toLowerCase();
+    const comp = { code:{ coding:[{ system:DETAIL_SYSTEM, code:code, display:first.detailName }], text:first.detailName } };
+    const radio = document.querySelector('input[name="v_' + gi + '"]:checked');
+    const num = $("n_" + gi);
+    if (radio) {
+      const disp = radio.dataset.display || radio.value;
+      comp.valueCodeableConcept = { coding:[{ system:DETAIL_SYSTEM + "/" + code, code:radio.value, display:disp }], text:disp };
+    } else if (num) {
+      const v = num.value.trim(); if (v==="") return;
+      if (type==="integer") comp.valueInteger = parseInt(v, 10);
+      else if (["quantity","number","decimal"].includes(type)) {
+        const mm = code==="sizeMm";
+        comp.valueQuantity = { value:Number(v), unit: mm ? "mm" : "1", system:"http://unitsofmeasure.org", code: mm ? "mm" : "1" };
+      } else comp.valueString = v;
+    } else return;
+    comps.push(comp);
+  });
+  return comps;
+}
+
+$("make").onclick = () => {
+  try {
+    const patient = $("patientId").value.trim();
+    if (!patient) throw new Error("請填 Patient ID。");
+    if (!groups.length) throw new Error("請先讀取規格。");
+    const comps = buildComponents();
+    if (!comps.length) throw new Error("請至少勾選並填寫一個項目。");
+    const t = new Date($("effective").value);
+    if (isNaN(t.getTime())) throw new Error("紀錄時間無效。");
+    const obs = {
+      resourceType:"Observation",
+      status:"final",
+      category:[{ coding:[{ system:"http://terminology.hl7.org/CodeSystem/observation-category", code:"survey", display:"Survey" }] }],
+      code:{ coding:[{ system:PROBLEM_SYSTEM, code:problemCode, display:problemCode }], text:problemCode },
+      subject:{ reference:"Patient/" + patient },
+      effectiveDateTime: t.toISOString(),
+      component: comps
+    };
+    $("jsonOut").value = JSON.stringify(obs, null, 2);
+    $("uploadStatus").textContent = "已產生 JSON，請檢查後再上傳。";
+  } catch(e){ $("uploadStatus").textContent = "產生失敗：" + e.message; }
+};
+
+$("upload").onclick = async () => {
+  try {
+    const server = $("server").value.trim().replace(/\/+$/,"");
+    const obs = JSON.parse($("jsonOut").value);
+    if (obs.resourceType !== "Observation") throw new Error("JSON 必須是 Observation。");
+    $("uploadStatus").textContent = "上傳中…";
+    const res = await fetch(server + "/Observation", { method:"POST", headers:{ "Content-Type":"application/fhir+json" }, body: JSON.stringify(obs) });
+    const body = await res.text();
+    $("resp").value = "HTTP " + res.status + " " + res.statusText + "\n\n" + body;
+    if (!res.ok) throw new Error("伺服器回傳非成功狀態，請查看回應。");
+    let id = ""; try { id = JSON.parse(body).id || ""; } catch(e){}
+    if (!id) { const loc = res.headers.get("Location") || ""; const m = loc.match(/Observation\/([^/?]+)/); if (m) id = m[1]; }
+    if (id) { $("obsUrl").value = server + "/Observation/" + encodeURIComponent(id); $("uploadStatus").textContent = "上傳成功，已產生調閱 URL。"; }
+    else $("uploadStatus").textContent = "上傳成功，但取不到 ID，請查看回應。";
+  } catch(e){ $("uploadStatus").textContent = "上傳失敗：" + e.message + "\n若是 Failed to fetch，請檢查網路、CORS 或瀏覽器限制。"; }
+};
+$("open").onclick = () => { const u = $("obsUrl").value; if (u) window.open(u, "_blank"); };
+</script>
+</body>
+</html>
