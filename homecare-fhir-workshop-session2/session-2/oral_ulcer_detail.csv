@@ -1,0 +1,9 @@
+﻿problemCode,detailCode,detailName,detailNameEn,valueType,valueCode,valueDisplay,valueDisplayEn
+oral-ulcer,location,潰瘍位置,Ulcer location,code,tongue,舌頭,Tongue
+oral-ulcer,location,潰瘍位置,Ulcer location,code,inner-cheek,口腔內頰,Inner cheek
+oral-ulcer,location,潰瘍位置,Ulcer location,code,gum,牙齦,Gum
+oral-ulcer,appearance,外觀,Appearance,code,round,圓形,Round
+oral-ulcer,appearance,外觀,Appearance,code,irregular,不規則,Irregular
+oral-ulcer,pain,是否疼痛,Is painful,code,yes,是,Yes
+oral-ulcer,pain,是否疼痛,Is painful,code,no,否,No
+oral-ulcer,sizeMm,大小（毫米）,Size (mm),quantity,,,

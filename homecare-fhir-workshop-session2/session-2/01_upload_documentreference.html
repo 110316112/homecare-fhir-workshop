@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Q3｜上傳規格 DocumentReference</title>
+<style>
+body{font-family:system-ui,"Noto Sans TC",sans-serif;background:#f3f6fa;color:#263445;margin:0;padding:20px}
+main{max-width:920px;margin:auto}
+h1{font-size:24px}h2{font-size:18px;margin-top:0}
+.card{background:#fff;border:1px solid #dce4ed;border-radius:12px;padding:18px;margin:14px 0}
+label{display:block;font-weight:bold;margin:10px 0 4px}
+input[type=text],input[type=url],select,textarea{width:100%;box-sizing:border-box;padding:9px;border:1px solid #cbd5e1;border-radius:6px;font:inherit}
+textarea{min-height:170px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+.radios label{display:inline-block;font-weight:normal;margin-right:16px}
+button{border:0;border-radius:7px;padding:10px 16px;margin:8px 8px 0 0;background:#1769aa;color:#fff;cursor:pointer;font-size:15px}
+button.secondary{background:#536579}
+.hint{color:#526274;font-size:14px}.status{white-space:pre-wrap;margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+<h1>Q3：上傳 detail CSV 為 FHIR DocumentReference</h1>
+<p class="hint">教學原型，只使用虛構資料。依 DR-JSON-Template 建立 DocumentReference，並以 PUT 上傳。</p>
+
+<div class="card">
+<h2>1. 伺服器與規格檔</h2>
+<label for="server">FHIR Server URL</label>
+<input id="server" type="url" value="https://hapi.fhir.org/baseR4">
+<label for="docId">DocumentReference ID（自動產生 UUID）</label>
+<input id="docId" type="text" readonly>
+<button class="secondary" id="newId" type="button">重新產生 UUID</button>
+<label for="fileInput">選擇 detail 規格檔（預設 CSV）</label>
+<input id="fileInput" type="file" accept=".csv,.json,.md,.js,.txt">
+<label for="format">資料檔格式</label>
+<select id="format">
+<option value="csv" selected>CSV</option><option value="json">JSON</option><option value="md">MD</option><option value="js">JS</option>
+</select>
+</div>
+
+<div class="card">
+<h2>2. Micro-IG 資訊</h2>
+<label>訂立 micro-IG 的 FHIR resource</label>
+<div class="radios" id="resourceRadios">
+<label><input type="radio" name="resource" value="observation" checked> observation</label>
+<label><input type="radio" name="resource" value="condition"> condition</label>
+<label><input type="radio" name="resource" value="procedure"> procedure</label>
+<label><input type="radio" name="resource" value="other"> other</label>
+</div>
+<label for="otherResource">other 時請填入 resource 名稱</label>
+<input id="otherResource" type="text" placeholder="例如 questionnaire">
+<label for="kind">a. micro-ig 種類（寫入 identifier）</label>
+<input id="kind" type="text" placeholder="例如 observation-oral-ulcer">
+<label for="version">b. 版本（與種類一起寫入 masterIdentifier）</label>
+<input id="version" type="text" value="1.0.0">
+<label for="description">文件說明</label>
+<textarea id="description" style="min-height:70px"></textarea>
+</div>
+
+<div class="card">
+<h2>3. 規格檔內容（可直接修改）</h2>
+<textarea id="content" spellcheck="false"></textarea>
+<p class="hint">CSV 格式的標題列必須是：problemCode,detailCode,detailName,detailNameEn,valueType,valueCode,valueDisplay,valueDisplayEn，且每列 8 欄。</p>
+<button id="make" type="button">按鈕 1：產生 DocumentReference JSON</button>
+</div>
+
+<div class="card">
+<h2>4. DocumentReference JSON</h2>
+<textarea id="jsonOut" spellcheck="false"></textarea>
+<button id="upload" type="button">按鈕 2：PUT 上傳</button>
+<div id="status" class="status"></div>
+<label for="resp">伺服器回應</label>
+<textarea id="resp" readonly></textarea>
+<label for="docUrl">調閱此 DocumentReference 的 URL</label>
+<input id="docUrl" type="url" readonly>
+</div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const HEADERS = ["problemCode","detailCode","detailName","detailNameEn","valueType","valueCode","valueDisplay","valueDisplayEn"];
+const MIME = {csv:"text/csv", json:"application/json", md:"text/markdown", js:"text/javascript"};
+let kindEdited = false;
+
+function newUuid(){
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+    const r = Math.random()*16|0; return (c==="x" ? r : (r&3|8)).toString(16);
+  });
+}
+function parseCSV(text){
+  text = text.replace(/^\uFEFF/, "");
+  const rows=[]; let row=[], f="", q=false;
+  for (let i=0;i<text.length;i++){
+    const c=text[i];
+    if (q){
+      if (c==='"' && text[i+1]==='"'){ f+='"'; i++; }
+      else if (c==='"') q=false; else f+=c;
+    } else {
+      if (c==='"' && f==="") q=true;
+      else if (c===","){ row.push(f.trim()); f=""; }
+      else if (c==="\n"){ row.push(f.trim()); if(row.some(v=>v!=="")) rows.push(row); row=[]; f=""; }
+      else if (c!=="\r") f+=c;
+    }
+  }
+  row.push(f.trim()); if(row.some(v=>v!=="")) rows.push(row);
+  return rows;
+}
+function toBase64(text){
+  const bytes = new TextEncoder().encode(text); let bin="";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+function currentResource(){
+  const v = document.querySelector('input[name="resource"]:checked').value;
+  return v==="other" ? ($("otherResource").value.trim() || "other") : v;
+}
+function problemFromCsv(){
+  try { const rows = parseCSV($("content").value); return rows[1] ? rows[1][0] : ""; } catch(e){ return ""; }
+}
+function suggestKind(){
+  if (kindEdited) return;
+  const p = problemFromCsv();
+  if (p) $("kind").value = currentResource() + "-" + p;
+}
+function checkCsv(text){
+  const rows = parseCSV(text);
+  if (rows.length < 2) throw new Error("CSV 至少要有標題列和一筆資料。");
+  if (HEADERS.some((h,i)=>rows[0][i]!==h) || rows[0].length!==8)
+    throw new Error("標題列必須剛好是 8 欄：" + HEADERS.join(","));
+  rows.slice(1).forEach((r,i)=>{
+    if (r.length!==8) throw new Error("第 " + (i+2) + " 列有 " + r.length + " 欄，應為 8 欄。請檢查逗號。");
+  });
+}
+function buildDoc(){
+  const text = $("content").value.trim();
+  if (!text) throw new Error("請先選擇檔案或貼上內容。");
+  const fmt = $("format").value;
+  if (fmt==="csv") checkCsv(text);
+  const kind = $("kind").value.trim(), version = $("version").value.trim();
+  if (!kind) throw new Error("請填 micro-ig 種類。");
+  if (!version) throw new Error("請填版本。");
+  const resource = currentResource();
+  const problem = fmt==="csv" ? problemFromCsv() : kind;
+  const now = new Date().toISOString();
+  return {
+    resourceType:"DocumentReference",
+    id: $("docId").value,
+    masterIdentifier:{ system:"https://example.org/fhir/identifier/micro-ig-version", value: kind + "|" + version },
+    identifier:[{ system:"https://example.org/fhir/identifier/micro-ig", value: kind }],
+    status:"current",
+    docStatus:"final",
+    type:{ coding:[{ system:"https://example.org/fhir/CodeSystem/document-type", code:"detail-micro-ig", display:"Detail Micro-IG Specification" }], text:"Detail Micro-IG 規格文件" },
+    category:[{ coding:[{ system:"https://example.org/fhir/CodeSystem/micro-ig-resource", code:resource, display:resource }], text:"目標 FHIR Resource" }],
+    date: now,
+    description: $("description").value.trim() || ("Micro-IG detail 規格：" + kind),
+    content:[{ attachment:{ contentType: MIME[fmt] || "text/plain", language:"zh-TW", data: toBase64(text), title: (problem||kind) + "_detail." + fmt, creation: now } }],
+    context:{ practiceSetting:{ coding:[{ system:"https://example.org/fhir/CodeSystem/micro-ig-purpose", code: problem||kind, display: problem||kind }], text:"Micro-IG 用途" } }
+  };
+}
+
+$("docId").value = newUuid();
+$("newId").onclick = () => { $("docId").value = newUuid(); };
+$("kind").addEventListener("input", () => { kindEdited = true; });
+$("resourceRadios").addEventListener("change", suggestKind);
+$("content").addEventListener("input", suggestKind);
+$("fileInput").addEventListener("change", async e => {
+  const file = e.target.files[0]; if (!file) return;
+  $("content").value = await file.text();
+  const ext = file.name.split(".").pop().toLowerCase();
+  if (MIME[ext]) $("format").value = ext;
+  kindEdited = false; suggestKind();
+});
+$("make").onclick = () => {
+  try { $("jsonOut").value = JSON.stringify(buildDoc(), null, 2); $("status").textContent = "已產生 JSON，請檢查後再上傳。"; }
+  catch(e){ $("status").textContent = "產生失敗：" + e.message; }
+};
+$("upload").onclick = async () => {
+  try {
+    const server = $("server").value.trim().replace(/\/+$/,"");
+    const doc = JSON.parse($("jsonOut").value);
+    if (doc.resourceType!=="DocumentReference" || !doc.id) throw new Error("JSON 必須是含 id 的 DocumentReference。");
+    $("status").textContent = "上傳中…";
+    const url = server + "/DocumentReference/" + encodeURIComponent(doc.id);
+    const res = await fetch(url, { method:"PUT", headers:{ "Content-Type":"application/fhir+json" }, body: JSON.stringify(doc) });
+    const body = await res.text();
+    $("resp").value = "HTTP " + res.status + " " + res.statusText + "\n\n" + body;
+    if (!res.ok) throw new Error("伺服器回傳非成功狀態，請查看回應。");
+    $("docUrl").value = url;
+    $("status").textContent = "上傳成功。請複製下方 URL，用於 Q4 輸入程式。";
+  } catch(e){ $("status").textContent = "上傳失敗：" + e.message + "\n若是 Failed to fetch，請檢查網路、CORS 或瀏覽器限制。"; }
+};
+</script>
+</body>
+</html>

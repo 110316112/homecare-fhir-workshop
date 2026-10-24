@@ -1,0 +1,19 @@
+﻿problemCode,detailCode,detailName,detailNameEn,valueType,valueCode,valueDisplay,valueDisplayEn
+pain,severity,嚴重程度,Severity,code,mild,輕度,Mild
+pain,severity,嚴重程度,Severity,code,moderate,中度,Moderate
+pain,severity,嚴重程度,Severity,code,severe,重度,Severe
+pain,bodySite,發生部位,Body Site,code,head,頭部,Head
+pain,quality,疼痛模式,Pain Quality,code,sharp,刺痛,Sharp pain
+pain,quality,疼痛模式,Pain Quality,code,dull,悶痛,Dull pain
+pain,quality,疼痛模式,Pain Quality,code,burning,灼熱痛,Burning pain
+pain,onset,發生速度,Onset Speed,code,sudden,突然發生,Sudden onset
+pain,onset,發生速度,Onset Speed,code,gradual,逐漸發生,Gradual onset
+pain,frequency,發生頻率,Frequency,code,continuous,持續性,Continuous
+pain,frequency,發生頻率,Frequency,code,intermittent,間歇性,Intermittent
+pain,aggravating,加重因素,Aggravating Factor,code,movement,活動,Movement
+pain,relieving,緩解因素,Relieving Factor,code,rest,休息,Rest
+pain,radiation,疼痛放射,Radiation,boolean,no,無,No
+pain,radiation,疼痛放射,Radiation,boolean,yes,有,Yes
+pain,associated,伴隨症狀,Associated Symptom,code,nausea,噁心,Nausea
+pain,associated,伴隨症狀,Associated Symptom,code,dyspnea,呼吸困難,Dyspnea
+pain,score,疼痛分數,Pain Score,integer,,,,
