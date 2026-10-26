@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Q4｜病人問題 Observation 紀錄</title>
+<title>Q4 病人問題狀況 Observation 輸入</title>
 <style>
 body{font-family:system-ui,"Noto Sans TC",sans-serif;background:#f3f6fa;color:#263445;margin:0;padding:20px}
 main{max-width:920px;margin:auto}
@@ -33,7 +33,7 @@ button.secondary{background:#536579}
 <label for="patientId">Patient ID（測試用）</label>
 <input id="patientId" type="text" value="7158c01b-32ba-4fbd-a038-201a0a2a4e2a">
 <label for="specUrl">detail 規格的 DocumentReference URL</label>
-<input id="specUrl" type="url" value="" placeholder="請貼上 Q3 上傳成功後產生的 DocumentReference URL">
+<input id="specUrl" type="url" value="https://hapi.fhir.org/baseR4/DocumentReference/92286468-30cd-411d-84f5-7d747dea8d30">
 <label for="effective">紀錄時間（預設為電腦目前時間）</label>
 <input id="effective" type="datetime-local">
 <button id="load" type="button">讀取規格</button>
@@ -43,7 +43,7 @@ button.secondary{background:#536579}
 
 <div class="card">
 <h2>2. 選擇紀錄項目</h2>
-<p class="hint">勾選要記錄的項目；選項是單選（radio），數值項目請直接輸入。選了選項會自動勾選該項目。</p>
+<p class="hint">勾選要記錄的項目。CSV 的 selectionType=single 會顯示單選；selectionType=multiple 會顯示多選。數值項目請直接輸入。</p>
 <div id="details"><p class="hint">請先讀取規格。</p></div>
 </div>
 
@@ -64,7 +64,7 @@ button.secondary{background:#536579}
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const HEADERS = ["problemCode","detailCode","detailName","detailNameEn","valueType","valueCode","valueDisplay","valueDisplayEn"];
+const HEADERS = ["problemCode","detailCode","detailName","detailNameEn","valueType","selectionType","valueCode","valueDisplay","valueDisplayEn"];
 const DETAIL_SYSTEM = "https://example.org/fhir/CodeSystem/problem-detail";
 const PROBLEM_SYSTEM = "https://example.org/fhir/CodeSystem/patient-problem";
 let specRows = [], groups = [], problemCode = "";
@@ -111,7 +111,7 @@ $("load").onclick = async () => {
     const data = doc.content && doc.content[0] && doc.content[0].attachment && doc.content[0].attachment.data;
     if (!data) throw new Error("找不到 content[0].attachment.data。");
     const rows = parseCSV(decodeBase64UTF8(data));
-    if (rows.length < 2 || HEADERS.some((h,i)=>rows[0][i]!==h)) throw new Error("CSV 標題列不是預期的 8 欄格式。");
+    if (rows.length < 2 || HEADERS.some((h,i)=>rows[0][i]!==h)) throw new Error("CSV 標題列不是預期的 9 欄格式（需包含 selectionType）。");
     specRows = rows.slice(1).map(r => Object.fromEntries(HEADERS.map((h,i)=>[h, r[i] || ""]))).filter(r=>r.detailCode);
     if (!specRows.length) throw new Error("CSV 沒有資料列。");
     problemCode = specRows[0].problemCode;
@@ -128,11 +128,22 @@ $("load").onclick = async () => {
 function renderDetails(){
   $("details").innerHTML = groups.map(([code, items], gi) => {
     const first = items[0], type = (first.valueType || "code").toLowerCase();
+    const selection = (first.selectionType || "single").toLowerCase();
     let body;
-    if (["code","select","choice","boolean"].includes(type)) {
-      body = '<div class="opts">' + items.filter(x=>x.valueCode).map((x,oi) =>
-        '<label><input type="radio" name="v_' + gi + '" value="' + esc(x.valueCode) + '" data-gi="' + gi + '" data-display="' + esc(x.valueDisplay) + '"> ' +
-        esc(x.valueDisplay) + (x.valueDisplayEn ? " / " + esc(x.valueDisplayEn) : "") + '</label>').join("") + '</div>';
+    if (["code","select","choice"].includes(type)) {
+      if (selection !== "single" && selection !== "multiple") {
+        body = '<p class="hint">selectionType 無效：' + esc(selection) + '（請設定 single 或 multiple）</p>';
+      } else {
+        const inputType = selection === "multiple" ? "checkbox" : "radio";
+        const badge = selection === "multiple" ? "多選" : "單選";
+        body = '<div class="hint">選擇方式：<b>' + badge + '</b></div><div class="opts">' +
+          items.filter(x=>x.valueCode).map(x =>
+            '<label><input type="' + inputType + '" name="v_' + gi + '" value="' + esc(x.valueCode) +
+            '" data-gi="' + gi + '" data-display="' + esc(x.valueDisplay) + '" data-display-en="' + esc(x.valueDisplayEn || '') + '"> ' +
+            esc(x.valueDisplay) + (x.valueDisplayEn ? " / " + esc(x.valueDisplayEn) : "") + '</label>').join("") + '</div>';
+      }
+    } else if (type === "boolean") {
+      body = '<label><input type="checkbox" id="b_' + gi + '" data-gi="' + gi + '"> 是</label>';
     } else {
       const num = ["integer","quantity","number","decimal"].includes(type);
       body = '<input type="' + (num ? "number" : "text") + '"' + (num ? ' step="any"' : "") + ' id="n_' + gi + '" data-gi="' + gi + '" placeholder="請輸入' + esc(first.detailName) + '">';
@@ -145,31 +156,31 @@ function renderDetails(){
     $("c_" + el.dataset.gi).checked = true;
   }));
 }
-
 function buildComponents(){
   const comps = [];
   groups.forEach(([code, items], gi) => {
     const cb = $("c_" + gi); if (!cb || !cb.checked) return;
     const first = items[0], type = (first.valueType || "code").toLowerCase();
     const comp = { code:{ coding:[{ system:DETAIL_SYSTEM, code:code, display:first.detailName }], text:first.detailName } };
-    const radio = document.querySelector('input[name="v_' + gi + '"]:checked');
-    const num = $("n_" + gi);
-    if (radio) {
-      const disp = radio.dataset.display || radio.value;
-      comp.valueCodeableConcept = { coding:[{ system:DETAIL_SYSTEM + "/" + code, code:radio.value, display:disp }], text:disp };
+    const selected = Array.from(document.querySelectorAll('input[name="v_' + gi + '"]:checked'));
+    const num = $("n_" + gi), bool = $("b_" + gi);
+    if (selected.length) {
+      const codings = selected.map(el => ({system:DETAIL_SYSTEM + "/" + code, code:el.value, display:el.dataset.display || el.value}));
+      comp.valueCodeableConcept = { coding:codings, text:codings.map(c => c.display).join("、") };
+    } else if (bool && bool.checked) {
+      comp.valueBoolean = true;
     } else if (num) {
-      const v = num.value.trim(); if (v==="") return;
-      if (type==="integer") comp.valueInteger = parseInt(v, 10);
+      const v = num.value.trim(); if (v === "") return;
+      if (type === "integer") comp.valueInteger = parseInt(v, 10);
       else if (["quantity","number","decimal"].includes(type)) {
-        const mm = code==="sizeMm";
-        comp.valueQuantity = { value:Number(v), unit: mm ? "mm" : "1", system:"http://unitsofmeasure.org", code: mm ? "mm" : "1" };
+        const mm = code === "sizeMm";
+        comp.valueQuantity = {value:Number(v), unit:mm ? "mm" : "1", system:"http://unitsofmeasure.org", code:mm ? "mm" : "1"};
       } else comp.valueString = v;
     } else return;
     comps.push(comp);
   });
   return comps;
 }
-
 $("make").onclick = () => {
   try {
     const patient = $("patientId").value.trim();
